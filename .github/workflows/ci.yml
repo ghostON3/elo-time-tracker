@@ -33,3 +33,9 @@ jobs:
       # CI runners have no Hyprland; the integration test that needs `hyprctl`
       # builds a shim into the temp dir and points $PATH at it.
       - run: cargo test --all
+
+  check-public-safe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/check-public-safe.mjs
