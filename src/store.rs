@@ -76,6 +76,25 @@ impl Store {
         Ok(out)
     }
 
+    /// The most recent event's `started_at`, parsed to UTC. `None` when the
+    /// table is empty. Used by the liveness/freshness check.
+    pub fn latest_started_at(&self) -> Result<Option<DateTime<Utc>>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row("SELECT MAX(started_at) FROM events", [], |r| r.get(0))
+            .ok()
+            .flatten();
+        match raw {
+            None => Ok(None),
+            Some(s) => {
+                let ts = DateTime::parse_from_rfc3339(&s)
+                    .with_context(|| format!("parse latest started_at {s}"))?
+                    .with_timezone(&Utc);
+                Ok(Some(ts))
+            }
+        }
+    }
+
     /// Events whose `started_at` is >= `from` (UTC).
     pub fn events_since(&self, from: DateTime<Utc>) -> Result<Vec<Event>> {
         let mut stmt = self.conn.prepare(
@@ -129,6 +148,21 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].app_class, "kitty");
         assert_eq!(all[0].duration_secs, 30);
+    }
+
+    #[test]
+    fn latest_started_at_reads_max_or_none() {
+        let dir = TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).unwrap();
+        assert!(store.latest_started_at().unwrap().is_none());
+        let mut e1 = mk_event("a", 10);
+        e1.started_at = "2026-05-15T10:00:00Z".into();
+        let mut e2 = mk_event("b", 20);
+        e2.started_at = "2026-05-16T12:30:00Z".into();
+        store.insert(&e1).unwrap();
+        store.insert(&e2).unwrap();
+        let latest = store.latest_started_at().unwrap().unwrap();
+        assert_eq!(latest.to_rfc3339(), "2026-05-16T12:30:00+00:00");
     }
 
     #[test]

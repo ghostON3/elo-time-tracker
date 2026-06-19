@@ -20,6 +20,25 @@ pub struct Cli {
     #[arg(long, default_value_t = 300)]
     pub flush_every_secs: u64,
 
+    /// If the gap between two consecutive polls exceeds this many seconds, the
+    /// daemon is treated as having been ABSENT (suspend, stall, clock jump):
+    /// the open event is closed at its last good duration and the gap is NOT
+    /// credited to any window. Prevents crediting wall-time nobody observed.
+    #[arg(long, default_value_t = 180)]
+    pub idle_gap_secs: u64,
+
+    /// Staleness threshold (seconds). `--health` reports STALE and the daemon
+    /// warns when no event has been captured for longer than this.
+    #[arg(long, default_value_t = 900)]
+    pub stale_after_secs: i64,
+
+    /// Any calendar day whose total focused-window time exceeds this many hours
+    /// is flagged in `--report` as likely containing away/idle time (this host
+    /// has no input-idle sensor, so focused-window time is wall-clock, not
+    /// verified-active time).
+    #[arg(long, default_value_t = 16)]
+    pub implausible_day_hours: i64,
+
     /// SQLite file path. Defaults to $XDG_DATA_HOME/elo-time-tracker/log.db
     /// (or ~/.local/share/elo-time-tracker/log.db).
     #[arg(long)]
@@ -37,6 +56,11 @@ pub struct Cli {
     /// Dump all events as JSON on stdout.
     #[arg(long)]
     pub export_json: bool,
+
+    /// Report capture liveness: is the daemon actually recording, or alive but
+    /// dark? Exits non-zero (2) when data is STALE beyond --stale-after-secs.
+    #[arg(long)]
+    pub health: bool,
 }
 
 #[derive(Debug)]
@@ -44,11 +68,14 @@ pub enum Mode {
     Daemon,
     Report { since: Option<String> },
     ExportJson,
+    Health,
 }
 
 impl Cli {
     pub fn mode(&self) -> Mode {
-        if self.export_json {
+        if self.health {
+            Mode::Health
+        } else if self.export_json {
             Mode::ExportJson
         } else if self.report {
             Mode::Report {

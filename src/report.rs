@@ -30,12 +30,18 @@ pub fn parse_since(input: Option<&str>) -> Result<DateTime<Utc>> {
     Ok(Utc::now() - delta)
 }
 
-pub fn print_report(store: &Store, since: Option<&str>) -> Result<()> {
+pub fn print_report(store: &Store, since: Option<&str>, implausible_day_hours: i64) -> Result<()> {
     let from = parse_since(since)?;
     let events = store.events_since(from)?;
     let totals = aggregate_by_app(&events);
 
     println!("elo-time-tracker — events since {}", from.to_rfc3339());
+    // Honesty header: say exactly what this measures. This host has no
+    // input-idle sensor, so the number is focused-window WALL time, not
+    // verified-active time.
+    println!(
+        "metric: focused-window wall time (NOT idle-adjusted — no input-idle sensor on this host)"
+    );
     println!("{} event(s)\n", events.len());
     if totals.is_empty() {
         println!("(no data in window)");
@@ -58,7 +64,65 @@ pub fn print_report(store: &Store, since: Option<&str>) -> Result<()> {
     }
     println!();
     println!("total: {}", format_duration(totals.values().sum::<i64>()));
+
+    // Flag any day whose focused-window total exceeds the plausibility ceiling —
+    // it almost certainly includes away/idle time the host cannot detect.
+    let flagged = days_exceeding(&events, implausible_day_hours * 3600);
+    if !flagged.is_empty() {
+        println!();
+        println!(
+            "⚠ {} day(s) exceed {}h focused-window time — likely include away/idle time (no input-idle sensor):",
+            flagged.len(),
+            implausible_day_hours
+        );
+        for (day, secs) in &flagged {
+            println!("    {day}: {}", format_duration(*secs));
+        }
+    }
     Ok(())
+}
+
+/// Report capture liveness: is the daemon recording, or alive but dark?
+/// Returns `true` when fresh, `false` when STALE or no data yet.
+pub fn print_health(store: &Store, stale_after_secs: i64) -> Result<bool> {
+    match store.latest_started_at()? {
+        None => {
+            println!("elo-time-tracker health: UNKNOWN — no events recorded yet");
+            Ok(false)
+        }
+        Some(ts) => {
+            let age = (Utc::now() - ts).num_seconds().max(0);
+            let stale = age > stale_after_secs;
+            println!(
+                "elo-time-tracker health: {}",
+                if stale { "STALE" } else { "OK" }
+            );
+            println!(
+                "  latest event: {} ({} ago)",
+                ts.to_rfc3339(),
+                format_duration(age)
+            );
+            println!("  threshold:    {}", format_duration(stale_after_secs));
+            if stale {
+                println!("  ⚠ daemon may be alive but NOT capturing — a live process is not proof of live data. Investigate hyprctl / restart.");
+            }
+            Ok(!stale)
+        }
+    }
+}
+
+/// Total focused-window seconds per calendar day (UTC date of `started_at`),
+/// keeping only days at/over `threshold_secs`.
+pub fn days_exceeding(events: &[Event], threshold_secs: i64) -> Vec<(String, i64)> {
+    let mut per_day: BTreeMap<String, i64> = BTreeMap::new();
+    for ev in events {
+        let day = ev.started_at.get(0..10).unwrap_or("").to_string();
+        *per_day.entry(day).or_insert(0) += ev.duration_secs;
+    }
+    per_day
+        .into_iter()
+        .filter(|(_, secs)| *secs >= threshold_secs)
+        .collect()
 }
 
 pub fn export_json(store: &Store) -> Result<()> {
@@ -121,6 +185,18 @@ mod tests {
         let totals = aggregate_by_app(&evs);
         assert_eq!(*totals.get("kitty").unwrap(), 45);
         assert_eq!(*totals.get("firefox").unwrap(), 60);
+    }
+
+    #[test]
+    fn days_exceeding_flags_only_over_threshold() {
+        let mut a = mk("kitty", 17 * 3600); // 17h focused on day A
+        a.started_at = "2026-06-18T02:00:00Z".into();
+        let mut b = mk("kitty", 3 * 3600); // 3h on day B
+        b.started_at = "2026-06-17T10:00:00Z".into();
+        let flagged = days_exceeding(&[a, b], 16 * 3600);
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(flagged[0].0, "2026-06-18");
+        assert_eq!(flagged[0].1, 17 * 3600);
     }
 
     #[test]

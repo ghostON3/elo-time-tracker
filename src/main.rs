@@ -26,14 +26,28 @@ async fn main() -> Result<()> {
     match cli.mode() {
         Mode::Report { since } => {
             let store = store::Store::open(&db_path)?;
-            report::print_report(&store, since.as_deref())?;
+            report::print_report(&store, since.as_deref(), cli.implausible_day_hours)?;
         }
         Mode::ExportJson => {
             let store = store::Store::open(&db_path)?;
             report::export_json(&store)?;
         }
+        Mode::Health => {
+            let store = store::Store::open(&db_path)?;
+            let healthy = report::print_health(&store, cli.stale_after_secs)?;
+            if !healthy {
+                std::process::exit(2);
+            }
+        }
         Mode::Daemon => {
-            daemon::run(cli.interval_secs, cli.flush_every_secs, db_path).await?;
+            daemon::run(
+                cli.interval_secs,
+                cli.flush_every_secs,
+                cli.idle_gap_secs,
+                cli.stale_after_secs,
+                db_path,
+            )
+            .await?;
         }
     }
     Ok(())

@@ -53,6 +53,12 @@ pub struct Aggregator {
     tick_secs: i64,
     /// When a single open event reaches this many seconds, flush it.
     max_dur_secs: i64,
+    /// If the wall gap between two consecutive ticks exceeds this, the daemon
+    /// was absent (suspend / stall / clock jump): close the open event and do
+    /// NOT credit the gap to any window.
+    idle_gap_secs: i64,
+    /// Wall time of the previous observed tick.
+    last_tick_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Default)]
@@ -62,11 +68,15 @@ pub struct TickOutcome {
 }
 
 impl Aggregator {
-    pub fn new(tick_secs: i64, max_dur_secs: i64) -> Self {
+    pub fn new(tick_secs: i64, max_dur_secs: i64, idle_gap_secs: i64) -> Self {
+        let tick_secs = tick_secs.max(1);
         Self {
             open: None,
-            tick_secs: tick_secs.max(1),
+            tick_secs,
             max_dur_secs: max_dur_secs.max(1),
+            // A gap must be at least longer than one normal tick to count as absence.
+            idle_gap_secs: idle_gap_secs.max(tick_secs + 1),
+            last_tick_at: None,
         }
     }
 
@@ -76,6 +86,19 @@ impl Aggregator {
     /// we flush the open event but do not start a new one.
     pub fn tick(&mut self, window: Option<&ActiveWindow>, now: DateTime<Utc>) -> TickOutcome {
         let mut outcome = TickOutcome::default();
+
+        // Absence detection: a long gap since the last observed tick means the
+        // daemon was not polling (suspend / stall / clock jump). Close the open
+        // event at its last good duration; the unobserved gap is credited to
+        // nothing — the sensor never claims time it did not watch.
+        if let Some(last) = self.last_tick_at {
+            if (now - last).num_seconds() > self.idle_gap_secs {
+                if let Some(open) = self.open.take() {
+                    outcome.flushed.push(open.into_event());
+                }
+            }
+        }
+        self.last_tick_at = Some(now);
 
         let Some(w) = window else {
             if let Some(open) = self.open.take() {
@@ -131,7 +154,7 @@ mod tests {
 
     #[test]
     fn collapses_consecutive_same_window() {
-        let mut agg = Aggregator::new(5, 300);
+        let mut agg = Aggregator::new(5, 300, 180);
         let kitty = w("kitty", "tmux");
         let now = t("2026-05-16T10:00:00Z");
 
@@ -150,7 +173,7 @@ mod tests {
 
     #[test]
     fn flushes_on_window_change() {
-        let mut agg = Aggregator::new(5, 300);
+        let mut agg = Aggregator::new(5, 300, 180);
         let kitty = w("kitty", "tmux");
         let firefox = w("firefox", "GitHub");
 
@@ -172,7 +195,7 @@ mod tests {
     fn forced_flush_at_max_duration() {
         // tick 5s, max 10s → after the 2nd tick (10s) we force-flush and open
         // a fresh event covering the same tick.
-        let mut agg = Aggregator::new(5, 10);
+        let mut agg = Aggregator::new(5, 10, 180);
         let kitty = w("kitty", "tmux");
 
         let o1 = agg.tick(Some(&kitty), t("2026-05-16T10:00:00Z"));
@@ -190,7 +213,7 @@ mod tests {
 
     #[test]
     fn empty_window_flushes_open() {
-        let mut agg = Aggregator::new(5, 300);
+        let mut agg = Aggregator::new(5, 300, 180);
         let kitty = w("kitty", "tmux");
         let _ = agg.tick(Some(&kitty), t("2026-05-16T10:00:00Z"));
         let out = agg.tick(None, t("2026-05-16T10:00:05Z"));
@@ -200,8 +223,29 @@ mod tests {
     }
 
     #[test]
+    fn gap_closes_open_without_crediting_the_gap() {
+        // The honesty fix: a long gap between polls (suspend / daemon stall)
+        // must NOT be credited as focused time.
+        let mut agg = Aggregator::new(5, 300, 180);
+        let kitty = w("kitty", "tmux");
+        let _ = agg.tick(Some(&kitty), t("2026-05-16T10:00:00Z"));
+        let _ = agg.tick(Some(&kitty), t("2026-05-16T10:00:05Z")); // open now = 10s
+
+        // 4-hour gap (machine suspended): the open event closes at its last
+        // good 10s; the 4h are credited to nothing.
+        let out = agg.tick(Some(&kitty), t("2026-05-16T14:00:05Z"));
+        assert_eq!(out.flushed.len(), 1);
+        assert_eq!(out.flushed[0].duration_secs, 10);
+
+        // a fresh event is open for the observed tick only
+        let last = agg.flush().unwrap();
+        assert_eq!(last.app_class, "kitty");
+        assert_eq!(last.duration_secs, 5);
+    }
+
+    #[test]
     fn title_change_breaks_aggregation() {
-        let mut agg = Aggregator::new(5, 300);
+        let mut agg = Aggregator::new(5, 300, 180);
         let a = w("firefox", "GitHub");
         let b = w("firefox", "Hacker News");
         let _ = agg.tick(Some(&a), t("2026-05-16T10:00:00Z"));
