@@ -1,0 +1,17 @@
+[Unit]
+Description=elo-time-tracker — Hyprland per-app focus time daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Adjust path if you install the binary elsewhere.
+ExecStart=%h/.cargo/bin/elo-time-tracker --interval-secs 5
+Restart=on-failure
+RestartSec=5
+# Resource sanity: this should never use more than a few MB.
+MemoryHigh=64M
+MemoryMax=128M
+
+[Install]
+WantedBy=graphical-session.target

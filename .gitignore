@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+*.db
+*.db-journal
+.DS_Store
+
+# Local public-safety denylist — real private slugs/secrets live here, never committed.
+# Copy .public-safe-denylist.example.json to this path and fill in real patterns.
+.public-safe-denylist.local.json

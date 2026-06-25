@@ -1,0 +1,24 @@
+{
+  "_comment": "Public-safety denylist (EXAMPLE / committed). Copy this file to '.public-safe-denylist.local.json' (gitignored) and replace the GENERIC placeholders below with your real private slugs/paths/secrets. The scanner prefers the .local.json when present and falls back to this example, so CI always runs a functional gate without leaking real internal names. Each rule: { name, re (JS RegExp source as a string), flags?, hint? }.",
+  "block": [
+    { "name": "home-dir-abs", "re": "/home/USER\\b", "hint": "absolute home path of a specific user" },
+    { "name": "agent-config-dir", "re": "\\.agent-config(-\\d+)?/", "hint": "private agent/tooling config dir" },
+    { "name": "private-vault-tilde", "re": "~/private-vault/", "hint": "personal knowledge-base path" },
+    { "name": "private-vault-abs", "re": "(?<!~)/private-vault/", "hint": "personal knowledge-base path (absolute)" },
+    { "name": "internal-monorepo", "re": "internal-monorepo\\b", "hint": "name of the private source monorepo" },
+    { "name": "internal-person-name", "re": "\\bINTERNAL_NAME\\b", "hint": "real legal name placeholder" },
+    { "name": "internal-state-file", "re": "\\binternal-state\\.json\\b", "hint": "private state file" },
+    { "name": "internal-metric", "re": "\\binternal_metric\\b", "hint": "private metric field" },
+    { "name": "internal-sync-field", "re": "\\binternal_sync\\b", "hint": "private sync field" },
+    { "name": "internal-token-name", "re": "\\bINTERNAL_TOKEN\\b", "hint": "private env-var token name" },
+    { "name": "tailscale-cgnat", "re": "\\b100\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b", "hint": "tailscale CGNAT IP" },
+    { "name": "secret-aws", "re": "\\bAKIA[0-9A-Z]{12,}\\b", "hint": "AWS access key id" },
+    { "name": "secret-gh-token", "re": "\\bghp_[A-Za-z0-9]{20,}\\b", "hint": "GitHub OAuth/PAT token" },
+    { "name": "secret-gh-pat", "re": "\\bgithub_pat_[A-Za-z0-9_]{20,}\\b", "hint": "GitHub fine-grained PAT" },
+    { "name": "secret-anthropic", "re": "\\bsk-ant-[A-Za-z0-9-]{20,}\\b", "hint": "Anthropic API key" }
+  ],
+  "warn": [
+    { "name": "example-handle", "re": "\\bEXAMPLE_HANDLE\\b", "flags": "i", "hint": "internal handle that may be intentional" },
+    { "name": "internal-protocol", "re": "\\bINTERNAL_PROTOCOL\\b", "flags": "i", "hint": "private protocol/process name" }
+  ]
+}
